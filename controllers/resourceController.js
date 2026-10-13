@@ -1,28 +1,45 @@
 import { pool } from "../database.js";
 import crypto from "crypto";
+import pdfParse from "pdf-parse";
+import mammoth from "mammoth";
 
-export const uploadResource = async (req, res) => {
+export const uploadResourceFile = async (req, res) => {
     try {
         const classroomId = Number(req.params.classroomId);
-        const { filename, file_content } = req.body;
+        const { filename, file_base64, file_type } = req.body;
 
-        if (!filename || !file_content) {
-            return res.status(400).json({ message: "Filename and file content are required." });
+        if (!filename || !file_base64) {
+            return res.status(400).json({ message: "Filename and file payload are required." });
+        }
+
+        const buffer = Buffer.from(file_base64, "base64");
+        let extractedText = "";
+
+        // Parse file text based on extension / mime type
+        if (filename.endsWith(".pdf") || file_type === "application/pdf") {
+            const parsedPdf = await pdfParse(buffer);
+            extractedText = parsedPdf.text;
+        } else if (filename.endsWith(".docx") || file_type.includes("wordprocessingml")) {
+            const parsedDocx = await mammoth.extractRawText({ buffer: buffer });
+            extractedText = parsedDocx.value;
+        } else {
+            // Fallback for plain text or markdown files
+            extractedText = buffer.toString("utf-8");
         }
 
         const resId = `res_${crypto.randomBytes(4).toString("hex")}`;
         await pool.execute(
             `INSERT INTO classroom_resources (id, classroom_id, filename, file_content) VALUES (?, ?, ?, ?)`,
-            [resId, classroomId, filename, file_content]
+            [resId, classroomId, filename, extractedText]
         );
 
         return res.status(201).json({
-            message: "Lecture resource uploaded successfully.",
+            message: "Lecture file successfully parsed, indexed into RAG, and stored.",
             resource: { id: resId, filename }
         });
     } catch (error) {
-        console.error("Upload resource error:", error);
-        return res.status(500).json({ message: "Server error uploading resource." });
+        console.error("File upload & parse error:", error);
+        return res.status(500).json({ message: "Server error parsing uploaded document." });
     }
 };
 
